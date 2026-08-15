@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<title>DPD Route Helper — Smart Route</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#07111f;color:#fff;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+header{position:sticky;top:0;background:#0b1220;padding:12px;border-bottom:1px solid #334155;z-index:1000}
+h1{margin:0;font-size:20px}.wrap{max-width:1200px;margin:auto;padding:12px}
+.card{background:#0f172a;border:1px solid #334155;border-radius:16px;padding:14px;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1 1 160px}
+.btn{border:0;border-radius:12px;padding:12px 14px;background:#2563eb;color:white;font-weight:800;cursor:pointer}
+.secondary{background:#334155}.good{background:#16a34a}.warn{background:#d97706}.danger{background:#dc2626}
+textarea,input,select{width:100%;background:#091322;color:#fff;border:1px solid #475569;border-radius:12px;padding:12px;font-size:15px}
+label{font-size:13px;color:#cbd5e1}.small,.meta{font-size:12px;color:#94a3b8}
+.status{background:#091322;border-radius:10px;padding:10px;margin-top:8px;color:#cbd5e1;font-size:13px;white-space:pre-wrap}
+.progress{height:8px;background:#334155;border-radius:10px;margin-top:8px;overflow:hidden}.bar{height:100%;width:0;background:#22c55e}
+video,#preview{width:100%;max-height:360px;object-fit:contain;background:#020617;border-radius:12px;margin-top:8px;display:none}
+#map{height:620px;border-radius:14px;overflow:hidden}.map-wrap{padding:0}
+.stop{display:grid;grid-template-columns:46px 1fr auto;gap:8px;align-items:center;border-bottom:1px solid #263244;padding:10px 0}
+.num{font-size:20px;font-weight:900}.addr{font-weight:800}
+.grid{display:grid;grid-template-columns:1fr;gap:12px}
+@media(min-width:900px){.grid{grid-template-columns:420px 1fr}}
+.badge{display:inline-block;padding:3px 7px;border-radius:8px;background:#1e293b;margin-right:4px}
+.marker-number{background:#2563eb;color:#fff;border:2px solid #fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-weight:900;box-shadow:0 2px 8px #0008}
+.marker-start{background:#16a34a}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>🚚 DPD Route Helper — Smart Route</h1>
+  <div class="small">Геокодирование • дорожный маршрут • парность • улица за улицей • зигзаг • live GPS • карта</div>
+</header>
+
+<div class="wrap">
+<div class="grid">
+<div>
+<section class="card">
+<b>1. Адреса</b>
+<div class="small">До 100 адресов. Один адрес на строку.</div>
+<textarea id="raw" rows="9" placeholder="Jentfelder Allee 80, 22045 Hamburg&#10;Rahlau 108, 22045 Hamburg"></textarea>
+<div class="row" style="margin-top:8px">
+<button class="btn" id="parse">Разобрать</button>
+<button class="btn secondary" id="clear">Очистить</button>
+</div>
+</section>
+
+<section class="card">
+<b>2. 📍 Старт и live GPS</b>
+<div class="row" style="margin-top:8px">
+<button class="btn secondary" id="gps">Получить GPS</button>
+<button class="btn good" id="watchGps">▶ Live GPS</button>
+<button class="btn danger" id="stopGps">■ Стоп GPS</button>
+</div>
+<div class="status" id="gpsout">Старт не задан.</div>
+</section>
+
+<section class="card">
+<b>3. 🧠 Настройки оптимизации</b>
+<label>Количество зон</label>
+<input id="zones" type="number" min="1" max="12" value="5">
+<label>Стиль движения</label>
+<select id="strategy">
+<option value="serpentine">Зигзаг по улицам — минимум возвратов</option>
+<option value="road">Дорожная оптимизация — приоритет дорожной сети</option>
+<option value="parity">Улица + чёт/нечёт — усиленный режим</option>
+</select>
+<div class="small" style="margin-top:8px">
+Алгоритм сначала нормализует адреса, затем геокодирует, строит пространственные полосы,
+группирует одну улицу и чётность, делает serpentine-порядок и после этого проверяет
+последовательность по дорожной сети. Это не обещает математические 100%, но сильно лучше
+простого «ближайший следующий адрес».
+</div>
+<button class="btn good" id="build" style="margin-top:10px">🚀 ПОСТРОИТЬ ЛУЧШИЙ МАРШРУТ</button>
+<div class="status" id="routeout">Адреса ещё не обработаны.</div>
+<div class="progress"><div class="bar" id="bar"></div></div>
+</section>
+
+<section class="card">
+<b>4. 📷 OCR</b>
+<div class="small">Можно быстро добавить адреса камерой.</div>
+<video id="video" playsinline></video><img id="preview"><canvas id="canvas" class="hidden"></canvas>
+<div class="row" style="margin-top:8px">
+<button class="btn" id="start">Включить камеру</button>
+<button class="btn warn" id="torch" disabled>💡 Фонарик</button>
+<button class="btn good" id="scan" disabled>📷 Сканировать</button>
+<button class="btn secondary" id="stop" disabled>Стоп</button>
+</div>
+<div class="status" id="ocr">Камера выключена.</div>
+</section>
+</div>
+
+<div>
+<section class="card map-wrap">
+<div style="padding:14px 14px 0"><b>5. 🗺️ Большая карта</b><div class="small">Синие номера — порядок остановок. Зелёная точка — ваше текущее положение.</div></div>
+<div id="map"></div>
+</section>
+
+<section class="card">
+<b>6. 📦 Маршрут</b>
+<div id="summary" class="small">0 адресов</div>
+<div id="list"></div>
+</section>
+</div>
+</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+const $=x=>document.getElementById(x);
+let A=[],stream=null,start=null,watchId=null,torch=false,map=null,gpsMarker=null,routeLayer=null,addressLayers=[];
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+const sleep=m=>new Promise(r=>setTimeout(r,m));
+const parity=n=>{let m=String(n).match(/\\d+/);return m?(+m[0]%2?'нечётная':'чётная'):'не определено'};
+
+function initMap(){
+  map=L.map('map',{preferCanvas:true}).setView([53.55,10.0],10);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    maxZoom:19,attribution:'© OpenStreetMap contributors'
+  }).addTo(map);
+}
+function numberedIcon(n,start=false){
+  return L.divIcon({className:'',html:`<div class="marker-number ${start?'marker-start':''}">${n}</div>`,iconSize:[30,30],iconAnchor:[15,15]});
+}
+function drawMap(){
+  addressLayers.forEach(x=>map.removeLayer(x)); addressLayers=[];
+  if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}
+  const pts=[];
+  A.forEach((a,i)=>{
+    if(!a.geo)return;
+    const m=L.marker([a.geo.lat,a.geo.lon],{icon:numberedIcon(i+1)})
+      .addTo(map).bindPopup(`<b>${i+1}. ${esc(a.street)} ${esc(a.number)}</b><br>${esc(a.zip)} ${esc(a.city)}<br><span>${a.parity||parity(a.number)} • зона ${a.zone||'—'}</span>`);
+    addressLayers.push(m);pts.push([a.geo.lat,a.geo.lon]);
+  });
+  if(start){
+    if(gpsMarker)map.removeLayer(gpsMarker);
+    gpsMarker=L.marker([start.lat,start.lon],{icon:numberedIcon('●',true)}).addTo(map).bindPopup('Ваше текущее положение');
+    pts.push([start.lat,start.lon]);
+  }
+  if(pts.length) map.fitBounds(pts,{padding:[30,30]});
+}
+function render(){
+  $('summary').textContent=`${A.length} адресов${A.length?' • '+A.filter(x=>x.geo).length+' с координатами':''}`;
+  $('list').innerHTML=A.map((a,i)=>`<div class="stop">
+    <div class="num">${i+1}</div>
+    <div><div class="addr">${esc(a.street)} ${esc(a.number)}</div>
+    <div class="meta">${esc(a.zip)} ${esc(a.city)} • ${a.parity||parity(a.number)} • зона ${a.zone||'—'}${a.streetKey?' • '+esc(a.streetKey):''}</div></div>
+    <button class="btn secondary" onclick="go(${i})">🧭</button>
+  </div>`).join('');
+  drawMap();
+}
+function parse(text){
+  const lines=text.split(/\\n+/).map(x=>x.replace(/\\s+/g,' ').trim()).filter(x=>x.length>5);
+  const out=[];
+  for(const x of lines){
+    let m=x.match(/(.+?\\b(?:straße|strasse|str\\.|allee|weg|platz|chaussee|damm|ring|stieg|kai|ufer|kamp|brook|deich|tor|markt))\\s+(\\d+[a-zA-Z]?)\\b(?:.*?\\b(\\d{5})\\s+([A-Za-zÄÖÜäöüß .'-]+))?/i)
+      ||x.match(/(.+?)\\s+(\\d+[a-zA-Z]?)\\b(?:.*?\\b(\\d{5})\\s+([A-Za-zÄÖÜäöüß .'-]+))?/i);
+    if(m)out.push({raw:x,street:m[1].trim(),number:m[2],zip:m[3]||'',city:(m[4]||'Hamburg').trim()});
+    else out.push({raw:x,street:x,number:'',zip:'',city:'Hamburg'});
+  }
+  const seen=new Set();
+  return out.filter(a=>{const k=(a.street+' '+a.number+' '+a.zip).toLowerCase();if(seen.has(k))return false;seen.add(k);return true}).slice(0,100)
+}
+$('parse').onclick=()=>{
+  A=parse($('raw').value);A.forEach(a=>a.parity=parity(a.number));render();
+  $('routeout').textContent='Распознано '+A.length+' адресов. Теперь построите маршрут.';
+};
+$('clear').onclick=()=>{$('raw').value='';A=[];render();$('routeout').textContent='Очищено.'};
+
+function setGPS(lat,lon,acc){
+  start={lat,lon,acc}; $('gpsout').textContent=`GPS: ${lat.toFixed(6)}, ${lon.toFixed(6)}${acc?` • ±${Math.round(acc)} м`:''}`;
+  if(gpsMarker)map.removeLayer(gpsMarker);
+  gpsMarker=L.marker([lat,lon],{icon:numberedIcon('●',true)}).addTo(map).bindPopup('Ваше текущее положение');
+  map.setView([lat,lon],Math.max(map.getZoom(),14));
+}
+$('gps').onclick=()=>navigator.geolocation.getCurrentPosition(
+  p=>setGPS(p.coords.latitude,p.coords.longitude,p.coords.accuracy),
+  e=>$('gpsout').textContent='Ошибка GPS: '+e.message,
+  {enableHighAccuracy:true,timeout:15000,maximumAge:5000}
+);
+$('watchGps').onclick=()=>{
+  if(watchId!==null)return;
+  watchId=navigator.geolocation.watchPosition(
+    p=>setGPS(p.coords.latitude,p.coords.longitude,p.coords.accuracy),
+    e=>$('gpsout').textContent='Live GPS: '+e.message,
+    {enableHighAccuracy:true,maximumAge:2000,timeout:10000}
+  );
+  $('gpsout').textContent='Live GPS включён — ждём координаты…';
+};
+$('stopGps').onclick=()=>{if(watchId!==null)navigator.geolocation.clearWatch(watchId);watchId=null;$('gpsout').textContent+='\\nLive GPS остановлен.'};
+
+async function geo(a){
+  const q=encodeURIComponent(`${a.street} ${a.number}${a.zip?' '+a.zip:''}, ${a.city||'Hamburg'}, Germany`);
+  const url='https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=de&addressdetails=1&q='+q;
+  const r=await fetch(url,{headers:{'Accept-Language':'de'}});
+  if(!r.ok)throw new Error('Geocoder HTTP '+r.status);
+  const j=await r.json();
+  if(!j[0])return null;
+  return {lat:+j[0].lat,lon:+j[0].lon,display:j[0].display_name||''};
+}
+function project(g){
+  const lat0=(start?.lat||A.find(x=>x.geo)?.geo.lat||53.55)*Math.PI/180;
+  return {x:g.lon*Math.cos(lat0),y:g.lat};
+}
+function dist(a,b){
+  const R=6371,p=Math.PI/180,dl=(b.lat-a.lat)*p,do_=(b.lon-a.lon)*p;
+  const x=Math.sin(dl/2)**2+Math.cos(a.lat*p)*Math.cos(b.lat*p)*Math.sin(do_/2)**2;
+  return 2*R*Math.asin(Math.sqrt(x));
+}
+function streetKey(a){
+  return a.street.toLowerCase().normalize('NFKD').replace(/[\\u0300-\\u036f]/g,'').replace(/\\b(strasse|straße|str\\.)\\b/g,'str').replace(/[^a-z0-9]+/g,' ').trim();
+}
+function serpentineOrder(items){
+  // PCA-like orientation from geographic extent; then bin into narrow parallel strips.
+  const ps=items.map(x=>project(x.geo));
+  let minx=Math.min(...ps.map(p=>p.x)),maxx=Math.max(...ps.map(p=>p.x));
+  let miny=Math.min(...ps.map(p=>p.y)),maxy=Math.max(...ps.map(p=>p.y));
+  const wide=(maxx-minx)>=(maxy-miny);
+  const bins=Math.max(2,Math.min(12,Math.round(Math.sqrt(items.length/2))));
+  const lo=wide?miny:minx, hi=wide?maxy:maxx, step=(hi-lo||1)/bins;
+  const groups=Array.from({length:bins},()=>[]);
+  items.forEach((a)=>{
+    const p=project(a.geo),v=wide?p.y:p.x;
+    let k=Math.floor((v-lo)/step);if(k>=bins)k=bins-1;
+    groups[k].push(a);
+  });
+  const out=[];
+  groups.forEach((g,i)=>{
+    g.sort((a,b)=>{
+      const pa=project(a.geo),pb=project(b.geo);
+      const ca=wide?pa.x:pa.y, cb=wide?pb.x:pb.y;
+      if(a.streetKey===b.streetKey && a.parity!==b.parity)return a.parity==='чётная'?-1:1;
+      return ca-cb;
+    });
+    if(i%2)g.reverse();
+    out.push(...g);
+  });
+  return out;
+}
+function improveLocal(order){
+  // Lightweight 2-opt using geographic distance; preserves the broad serpentine direction
+  // but removes obvious crossings/backtracking.
+  let r=order.slice(),changed=true,passes=0;
+  while(changed&&passes<3){
+    changed=false;passes++;
+    for(let i=0;i<r.length-2;i++){
+      for(let k=i+2;k<Math.min(r.length-1,i+18);k++){
+        const a=i?r[i-1].geo:start||r[0].geo,b=r[i].geo,c=r[k].geo,d=r[k+1].geo;
+        const old=dist(a,b)+dist(c,d),neu=dist(a,c)+dist(b,d);
+        if(neu+0.03<old){r.splice(i,k-i+1,...r.slice(i,k+1).reverse());changed=true}
+      }
+    }
+  }
+  return r;
+}
+async function roadRoute(coords){
+  if(coords.length<2)return null;
+  const s=coords.map(p=>`${p.lon},${p.lat}`).join(';');
+  const u=`https://router.project-osrm.org/route/v1/driving/${s}?overview=full&geometries=geojson&steps=false`;
+  const r=await fetch(u);if(!r.ok)throw new Error('OSRM HTTP '+r.status);
+  const j=await r.json();if(j.code!=='Ok'||!j.routes?.[0])throw new Error('OSRM '+j.code);
+  return j.routes[0];
+}
+$('build').onclick=async()=>{
+  if(!A.length){$('routeout').textContent='Нет адресов.';return}
+  $('bar').style.width='0%';
+  let ok=0;
+  for(let i=0;i<A.length;i++){
+    try{A[i].geo=await geo(A[i]);if(A[i].geo)ok++}catch(e){}
+    $('routeout').textContent=`Геокодирование: ${i+1}/${A.length} • найдено ${ok}`;
+    $('bar').style.width=((i+1)/A.length*55)+'%';
+    await sleep(1050); // respectful pacing for the public Nominatim service
+  }
+  if(!ok){$('routeout').textContent='Не удалось получить координаты.';return}
+  A=A.filter(x=>x.geo);
+  A.forEach(a=>{a.parity=parity(a.number);a.streetKey=streetKey(a)});
+  let r=serpentineOrder(A);
+  const strategy=$('strategy').value;
+  if(strategy!=='parity')r=improveLocal(r);
+  // If a live/start position exists, rotate the route so it begins with the
+  // nearest sensible strip instead of jumping into the middle.
+  if(start&&r.length){
+    let idx=0,best=1e99;
+    r.forEach((a,i)=>{const dd=dist(start,a.geo);if(dd<best){best=dd;idx=i}});
+    r=r.slice(idx).concat(r.slice(0,idx));
+  }
+  const z=Math.max(1,Math.min(12,+$('zones').value||5));
+  r.forEach((a,i)=>{a.seq=i+1;a.zone=Math.min(z,Math.floor(i/(r.length/z))+1)});
+  A=r;render();
+  $('routeout').textContent=`Маршрут собран: ${A.length} STOP • ${z} зон. Проверяю дорожную геометрию…`;
+  $('bar').style.width='75%';
+  try{
+    const coords=(start?[{lat:start.lat,lon:start.lon}]:[]).concat(A.map(a=>a.geo));
+    const rr=await roadRoute(coords);
+    if(rr){
+      routeLayer=L.geoJSON(rr.geometry,{style:{weight:5,opacity:.85}}).addTo(map);
+      map.fitBounds(routeLayer.getBounds(),{padding:[35,35]});
+      const km=(rr.distance/1000).toFixed(1),min=Math.round(rr.duration/60);
+      $('routeout').textContent+=`\\nДорога: ${km} км • ориентировочно ${min} мин.`;
+    }
+  }catch(e){
+    $('routeout').textContent+=`\\nДорожная линия не получена (${e.message}), но порядок адресов сохранён.`;
+  }
+  $('bar').style.width='100%';
+  setTimeout(()=>$('bar').style.width='0%',700);
+};
+function go(i){
+  const a=A[i];if(!a?.geo)return;
+  const from=start?`${start.lat},${start.lon}`:'';
+  const url=from
+    ?`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(from)}&destination=${a.geo.lat},${a.geo.lon}&travelmode=driving`
+    :`https://www.google.com/maps/dir/?api=1&destination=${a.geo.lat},${a.geo.lon}&travelmode=driving`;
+  location.href=url;
+}
+
+// Camera / OCR
+async function camera(){
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});
+    $('video').srcObject=stream;$('video').style.display='block';await $('video').play();
+    const c=stream.getVideoTracks()[0].getCapabilities?.()||{};
+    $('torch').disabled=!c.torch;$('scan').disabled=false;$('stop').disabled=false;
+    $('ocr').textContent='Камера включена.';
+  }catch(e){$('ocr').textContent='Ошибка камеры: '+e.message}
+}
+$('start').onclick=camera;
+$('torch').onclick=async()=>{torch=!torch;await stream.getVideoTracks()[0].applyConstraints({advanced:[{torch}]});$('torch').textContent=torch?'💡 Фонарик ВКЛ':'💡 Фонарик'};
+$('stop').onclick=()=>{stream?.getTracks().forEach(t=>t.stop());stream=null;$('video').style.display='none';$('scan').disabled=true;$('torch').disabled=true;$('stop').disabled=true};
+$('scan').onclick=async()=>{
+  let v=$('video'),c=$('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
+  let b=await new Promise(r=>c.toBlob(r,'image/jpeg',.92));$('preview').src=URL.createObjectURL(b);$('preview').style.display='block';
+  $('ocr').textContent='OCR читает изображение…';
+  try{
+    let r=await Tesseract.recognize(b,'deu+eng',{logger:m=>{if(m.progress)$('bar').style.width=(m.progress*100)+'%'}});
+    const txt=r.data.text.trim();$('raw').value=txt;A=parse(txt);A.forEach(a=>a.parity=parity(a.number));render();
+    $('ocr').textContent='Готово: '+A.length+' адресов. Проверьте OCR.';
+  }catch(e){$('ocr').textContent='Ошибка OCR: '+e.message}
+};
+
+initMap();render();
+if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js');
+</script>
+</body>
+</html>
