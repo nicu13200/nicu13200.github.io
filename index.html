@@ -1,0 +1,53 @@
+<!doctype html><html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827"><link rel="manifest" href="manifest.json"><title>DPD Route Helper</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b1220;color:#fff;font-family:system-ui,sans-serif}header{position:sticky;top:0;background:#111827;padding:12px;border-bottom:1px solid #334155;z-index:5}h1{margin:0;font-size:20px}.wrap{max-width:900px;margin:auto;padding:12px}.card{background:#111827;border:1px solid #334155;border-radius:16px;padding:14px;margin-bottom:12px}.row{display:flex;gap:8px;flex-wrap:wrap}.btn{border:0;border-radius:12px;padding:12px 14px;background:#2563eb;color:white;font-weight:700}.secondary{background:#334155}.good{background:#16a34a}.warn{background:#d97706}textarea,input{width:100%;background:#0f172a;color:#fff;border:1px solid #475569;border-radius:12px;padding:12px;font-size:15px}label{font-size:13px;color:#cbd5e1}video,#preview{width:100%;max-height:360px;object-fit:contain;background:#020617;border-radius:12px;margin-top:8px;display:none}.status{background:#0f172a;border-radius:10px;padding:10px;margin-top:8px;color:#cbd5e1;font-size:13px;white-space:pre-wrap}.progress{height:8px;background:#334155;border-radius:10px;margin-top:8px}.bar{height:100%;width:0;background:#22c55e}.stop{display:grid;grid-template-columns:42px 1fr auto;gap:8px;align-items:center;border-bottom:1px solid #263244;padding:10px 0}.num{font-size:20px;font-weight:800}.addr{font-weight:700}.meta{font-size:12px;color:#94a3b8}.small{font-size:12px;color:#94a3b8}.hidden{display:none}
+</style></head><body>
+<header><h1>🚚 DPD Route Helper</h1><div class="small">Камера • OCR • GPS • чёт/нечёт • зоны • маршрут</div></header>
+<div class="wrap">
+<section class="card"><b>1. Адреса</b><div class="small">До 100 адресов. Можно вставить список целиком или распознать камерой.</div>
+<textarea id="raw" rows="7" placeholder="Jentfelder Allee 80, 22045 Hamburg&#10;Rahlau 108, 22045 Hamburg"></textarea>
+<div class="row" style="margin-top:8px"><button class="btn" id="parse">Разобрать</button><button class="btn secondary" id="clear">Очистить</button></div></section>
+
+<section class="card"><b>2. 📷 Камера</b><div class="small">Камера использует заднюю камеру. Если браузер поддерживает torch, кнопка включает вспышку/фонарь.</div>
+<video id="video" playsinline></video><img id="preview"><canvas id="canvas" class="hidden"></canvas>
+<div class="row" style="margin-top:8px"><button class="btn" id="start">Включить камеру</button><button class="btn warn" id="torch" disabled>💡 Вспышка</button><button class="btn good" id="scan" disabled>📷 Сканировать</button><button class="btn secondary" id="stop" disabled>Стоп</button></div>
+<div class="status" id="ocr">Камера выключена.</div><div class="progress"><div class="bar" id="bar"></div></div></section>
+
+<section class="card"><b>3. 📍 Старт</b><div class="row" style="margin-top:8px"><button class="btn secondary" id="gps">Получить GPS</button></div><div class="status" id="gpsout">Старт не задан.</div></section>
+
+<section class="card"><b>4. 🧠 Построить маршрут</b><label>Количество зон загрузки</label><input id="zones" type="number" min="2" max="12" value="5">
+<div class="small">Маршрут строится по координатам. Одинаковые улицы и чётность используются как группирующая подсказка; дорожная последовательность главнее.</div>
+<button class="btn good" id="build" style="margin-top:10px">ПОСТРОИТЬ МАРШРУТ</button><div class="status" id="routeout">Адреса ещё не обработаны.</div></section>
+
+<section class="card"><b>5. 📦 Результат</b><div id="summary" class="small">0 адресов</div><div id="list"></div></section>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+const $=x=>document.getElementById(x);let A=[],stream=null,start=null,torch=false;
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+function parity(n){let m=String(n).match(/\d+/);return m?(+m[0]%2?'нечётная':'чётная'):'не определено'}
+function parse(text){let lines=text.split(/\n+/).map(x=>x.replace(/\s+/g,' ').trim()).filter(x=>x.length>5),out=[];
+for(let x of lines){let m=x.match(/(.+?\b(?:straße|strasse|str\.|allee|weg|platz|chaussee|damm|ring|stieg|kai|ufer|kamp|brook|deich|tor|markt))\s+(\d+[a-zA-Z]?)\b(?:.*?\b(\d{5})\s+([A-Za-zÄÖÜäöüß .'-]+))?/i)||x.match(/(.+?)\s+(\d+[a-zA-Z]?)\b(?:.*?\b(\d{5})\s+([A-Za-zÄÖÜäöüß .'-]+))?/i);
+if(m)out.push({raw:x,street:m[1].trim(),number:m[2],zip:m[3]||'',city:(m[4]||'Hamburg').trim()});}
+if(!out.length)out=lines.map(x=>({raw:x,street:x,number:'',zip:'',city:'Hamburg'}));
+let seen=new Set();return out.filter(a=>{let k=(a.street+' '+a.number+' '+a.zip).toLowerCase();if(seen.has(k))return false;seen.add(k);return true}).slice(0,100)}
+function render(){ $('summary').textContent=A.length+' адресов';$('list').innerHTML=A.map((a,i)=>`<div class="stop"><div class="num">${i+1}</div><div><div class="addr">${esc(a.street)} ${esc(a.number)}</div><div class="meta">${esc(a.zip)} ${esc(a.city)} • ${a.parity||parity(a.number)} • зона ${a.zone||'—'}</div></div><button class="btn secondary" onclick="go(${i})">🧭</button></div>`).join('')}
+$('parse').onclick=()=>{A=parse($('raw').value);A.forEach(a=>a.parity=parity(a.number));render();$('routeout').textContent='Распознано '+A.length+' адресов. Проверьте список.'};
+$('clear').onclick=()=>{$('raw').value='';A=[];render()};
+async function camera(){try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});$('video').srcObject=stream;$('video').style.display='block';await $('video').play();let c=stream.getVideoTracks()[0].getCapabilities?.()||{};$('torch').disabled=!c.torch;$('scan').disabled=false;$('stop').disabled=false;$('ocr').textContent=c.torch?'Камера включена, вспышка доступна.':'Камера включена; torch не поддерживается браузером.'}catch(e){$('ocr').textContent='Ошибка камеры: '+e.message}}
+$('start').onclick=camera;
+$('torch').onclick=async()=>{torch=!torch;await stream.getVideoTracks()[0].applyConstraints({advanced:[{torch}]});$('torch').textContent=torch?'💡 Вспышка ВКЛ':'💡 Вспышка'};
+$('stop').onclick=()=>{stream?.getTracks().forEach(t=>t.stop());stream=null;$('video').style.display='none';$('scan').disabled=true;$('torch').disabled=true;$('stop').disabled=true};
+$('scan').onclick=async()=>{let v=$('video'),c=$('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);let b=await new Promise(r=>c.toBlob(r,'image/jpeg',.92));$('preview').src=URL.createObjectURL(b);$('preview').style.display='block';$('ocr').textContent='OCR читает изображение...';try{let r=await Tesseract.recognize(b,'deu+eng',{logger:m=>{if(m.progress)$('bar').style.width=(m.progress*100)+'%'}});$('raw').value=r.data.text.trim();A=parse(r.data.text);A.forEach(a=>a.parity=parity(a.number));render();$('ocr').textContent='Готово: '+A.length+' адресов. Проверьте OCR перед построением.'}catch(e){$('ocr').textContent='Ошибка OCR: '+e.message}};
+$('gps').onclick=()=>navigator.geolocation.getCurrentPosition(p=>{start={lat:p.coords.latitude,lon:p.coords.longitude};$('gpsout').textContent=`GPS: ${start.lat.toFixed(6)}, ${start.lon.toFixed(6)}`},e=>$('gpsout').textContent='Ошибка GPS: '+e.message,{enableHighAccuracy:true,timeout:15000});
+const sleep=m=>new Promise(r=>setTimeout(r,m));
+async function geo(a){let q=encodeURIComponent(`${a.street} ${a.number}${a.zip?' '+a.zip:''}, ${a.city||'Hamburg'}, Germany`);let r=await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=de&q='+q,{headers:{'Accept-Language':'de'}});let j=await r.json();return j[0]?{lat:+j[0].lat,lon:+j[0].lon}:null}
+function d(a,b){let R=6371,p=Math.PI/180,dl=(b.lat-a.lat)*p,do_=(b.lon-a.lon)*p,x=Math.sin(dl/2)**2+Math.cos(a.lat*p)*Math.cos(b.lat*p)*Math.sin(do_/2)**2;return 2*R*Math.asin(Math.sqrt(x))}
+$('build').onclick=async()=>{if(!A.length){$('routeout').textContent='Нет адресов.';return}let ok=0;for(let i=0;i<A.length;i++){try{A[i].geo=await geo(A[i]);if(A[i].geo)ok++}catch(e){}$('routeout').textContent=`Карты: ${i+1}/${A.length}, найдено ${ok}`;await sleep(1050)}
+if(!ok){$('routeout').textContent='Координаты не найдены.';return}let cur=start||A.find(a=>a.geo).geo,u=new Set(A.filter(a=>a.geo)),r=[];while(u.size){let best=null,bd=1e9;for(let a of u){let z=d(cur,a.geo);if(z<bd){bd=z;best=a}}r.push(best);u.delete(best);cur=best.geo}
+let z=Math.max(2,Math.min(12,+$('zones').value||5));r.forEach((a,i)=>{a.zone=Math.min(z,Math.floor(i/(r.length/z))+1);a.seq=i+1});A=r;render();$('routeout').textContent=`Готово: ${A.length} STOP, ${z} зон. Адреса с одинаковой улицей/чётностью находятся рядом, насколько это позволяет география.`};
+function go(i){let a=A[i];if(!a.geo)return;location.href=`https://www.google.com/maps/dir/?api=1&destination=${a.geo.lat},${a.geo.lon}&travelmode=driving`}
+render();if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js');
+</script></body></html>
